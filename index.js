@@ -2,8 +2,12 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const crypto = require('crypto');
-
+require('dotenv').config();
+const db = require('./db');
+const Room = require('./models/Room');
+const cors = require('cors');
 const app = express();
+app.use(cors());
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
@@ -19,13 +23,13 @@ const usersInRooms = {};
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  socket.on('joinRoom', ({ roomName, username, password }) => {
+  socket.on('joinRoom', async ({ roomName, username, password }) => {
     try {
-      if (!rooms[roomName]) {
+      const room = await Room.findOne({ name: roomName });
+
+      if (!room) {
         throw new Error('Room does not exist');
       }
-
-      const room = rooms[roomName];
 
       if (room.password && room.password !== password) {
         throw new Error('Invalid password');
@@ -34,6 +38,7 @@ io.on('connection', (socket) => {
       socket.join(roomName);
       room.participants = room.participants || [];
       room.participants.push({ id: socket.id, username });
+      await room.save();
 
       usersInRooms[roomName] = room.participants;
 
@@ -44,13 +49,19 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('createRoom', ({ username, password }) => {
+  socket.on('createRoom', async ({ username, password }) => {
     try {
       const roomName = crypto.randomBytes(4).toString('hex');
       socket.join(roomName);
-      rooms[roomName] = { password, participants: [{ id: socket.id, username }] };
 
-      usersInRooms[roomName] = rooms[roomName].participants;
+      // Save the room to MongoDB
+      await Room.create({
+        name: roomName,
+        password: password,
+        participants: [{ id: socket.id, username }],
+      });
+
+      usersInRooms[roomName] = [{ id: socket.id, username }];
 
       socket.emit('roomCreated', { roomName, username });
       io.to(roomName).emit('updateUsers', usersInRooms[roomName]);
@@ -59,17 +70,19 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('leaveRoom', ({ roomName, username }) => {
+  socket.on('leaveRoom', async ({ roomName, username }) => {
     try {
-      if (!rooms[roomName]) {
+      const room = await Room.findOne({ name: roomName });
+
+      if (!room) {
         throw new Error('Room does not exist');
       }
 
       socket.leave(roomName);
 
-      const room = rooms[roomName];
       if (room.participants) {
         room.participants = room.participants.filter(user => user.id !== socket.id);
+        await room.save();
         usersInRooms[roomName] = room.participants;
       }
 
@@ -84,14 +97,18 @@ io.on('connection', (socket) => {
     socket.to(data.room).emit('update', data.text);
   });
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log(`User disconnected: ${socket.id}`);
-    for (const room in rooms) {
-      if (rooms[room].participants) {
-        rooms[room].participants = rooms[room].participants.filter(user => user.id !== socket.id);
-        usersInRooms[room] = rooms[room].participants;
-        io.to(room).emit('updateUsers', usersInRooms[room]);
+    try {
+      for (const room in rooms) {
+        if (rooms[room].participants) {
+          rooms[room].participants = rooms[room].participants.filter(user => user.id !== socket.id);
+          usersInRooms[room] = rooms[room].participants;
+          io.to(room).emit('updateUsers', usersInRooms[room]);
+        }
       }
+    } catch (error) {
+      console.error(error);
     }
   });
 });
