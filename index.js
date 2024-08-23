@@ -4,7 +4,7 @@ const socketIo = require('socket.io');
 const crypto = require('crypto');
 require('dotenv').config();
 const db = require('./db');
-const Room = require('./models/Room');
+const Room = require('./models/room.js');
 const cors = require('cors');
 const app = express();
 app.use(cors());
